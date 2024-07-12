@@ -4,6 +4,8 @@ from sklearn.decomposition import PCA
 import segyio
 import matplotlib.pyplot as plt
 
+tracecount = -1
+
 def read_grid_file(grid_file):
     """
     读取网格文件。
@@ -98,6 +100,12 @@ def decompress_segy(input_file, output_file, start_trace, end_trace):
     # 保存解压缩后的数据
     with segyio.create(output_file, spec) as segy_file:
         segy_file.trace = reconstructed_data[start_trace:end_trace]#(210000, 2001)
+        # segy_file.trace = reconstructed_data[:]
+    # 保存解压缩后的数据
+    # with segyio.create(output_file, spec) as segy_file:
+    #     for i in range(start_trace - 1, end_trace):
+    #         segy_file.trace[i - (start_trace - 1)] = reconstructed_data[i]
+
 
 def plot_data(original_data, decompressed_data, start_trace, end_trace):
     """
@@ -126,32 +134,39 @@ def plot_data(original_data, decompressed_data, start_trace, end_trace):
     plt.tight_layout()
     plt.show()
 
+def fun_main(): # 主函数
+    # 读取网格文件
+    grid_file = r"E:\XueXiao\比赛-东方杯\2-compress\PostData_training-grid.dat"
+    grid_header, grid_data = read_grid_file(grid_file)
+    print(grid_header)
+    print(grid_data)
 
+    # 示例用法
+    ori_file = r"E:\XueXiao\比赛-东方杯\2-compress\PostData-for-training.sgy"
+    comp_file = 'compressed_segy_data.npz'
+    compression_rate = 0.85 # 保留 95% 的特征
+    compress_segy(ori_file, comp_file, compression_rate)
 
-# 读取网格文件
-grid_file = r"E:\XueXiao\比赛-东方杯\2-compress\PostData_training-grid.dat"
-grid_header, grid_data = read_grid_file(grid_file)
-print(grid_header)
-print(grid_data)
+    output_file = 'decompressed_segy_data.segy'
+    start_trace = 0
+    end_trace = tracecount
+    decompress_segy(comp_file, output_file, start_trace, end_trace)
 
-# 示例用法
-ori_file = r"E:\XueXiao\比赛-东方杯\2-compress\PostData-for-training.sgy"
-comp_file = 'compressed_segy_data.npz'
-compression_rate = 0.7  # 保留 95% 的特征
-compress_segy(ori_file, comp_file, compression_rate)
+    # 加载原始数据
+    with segyio.open(ori_file, ignore_geometry=True) as segy_file:
+        original_data = segy_file.trace.raw[:]
 
-output_file = 'decompressed_segy_data.segy'
-start_trace = 1
-end_trace = 4000
-decompress_segy(comp_file, output_file, start_trace, end_trace)
+    # 解压缩数据
+    with segyio.open(output_file, ignore_geometry=True) as segy_file:
+        decompressed_data = segy_file.trace.raw[:]
 
-# 加载原始数据
-with segyio.open(ori_file, ignore_geometry=True) as segy_file:
-    original_data = segy_file.trace.raw[:]
+    # 绘制原始数据和解压缩后的数据
+    plot_data(original_data, decompressed_data, start_trace, end_trace)
+    print("main over")
 
-# 解压缩数据
-with segyio.open(output_file, ignore_geometry=True) as segy_file:
-    decompressed_data = segy_file.trace.raw[:]
+if __name__ == "__main__":
+    print("begin-----------------")
 
-# 绘制原始数据和解压缩后的数据
-plot_data(original_data, decompressed_data, start_trace, end_trace)
+    fun_main()
+
+    test = 1

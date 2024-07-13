@@ -1,10 +1,24 @@
 import numpy as np
 import pandas as pd
-from sklearn.decomposition import PCA
+from sklearn.decomposition import PCA,SparseCoder
 import segyio
 import matplotlib.pyplot as plt
+from PIL import Image
+import io
+import zlib
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from scipy.signal import butter, filtfilt, resample
+from sklearn.feature_selection import VarianceThreshold
+from sklearn.decomposition import MiniBatchDictionaryLearning
+from scipy.fftpack import dct
+from scipy.interpolate import interp1d
+from scipy.signal import convolve2d
+from scipy.ndimage import zoom
+import pywt
 
 tracecount = -1
+gob_shape = (-1, -1)
+downsample_factor = 7
 
 def read_grid_file(grid_file):
     """
@@ -55,11 +69,59 @@ def compress_segy(input_file, output_file, compression_rate):
         print(f"SEGY format: {segy_format}")
         # 打印数据的形状
         print(f"Data shape: {data.shape}")
+        global gob_shape
+        gob_shape = data.shape
+        print("compress--- gob_shape:", gob_shape)
 
+    # 定义卷积核
+    kernel_size = 5
+    kernel = np.ones((kernel_size, kernel_size)) / (kernel_size * kernel_size)
+
+    # 对数据进行2D卷积（平滑处理）
+    smoothed_data = convolve2d(data, kernel, mode='same', boundary='wrap')
+
+    # 降采样
+    def downsample2d(data, factor):
+        return data[::factor, ::factor]
+
+    global downsample_factor    # 降采样因子
+    downsampled_data = downsample2d(smoothed_data, downsample_factor)
+
+    # 打印原始数据和平滑后数据、降采样后数据的形状
+    print("Original data shape:", data.shape)
+    print("Smoothed data shape:", smoothed_data.shape)
+    print("Downsampled data shape:", downsampled_data.shape)
+    data = downsampled_data
+
+
+
+
+    # 降采样
+    def downsample(signal, factor):
+        return signal[::factor]
+
+    # # 对每个波形应用降采样
+    # downsample_factor = 10  # 降采样因子
+    # downsampled_data = np.array([downsample(waveform, downsample_factor) for waveform in data])
+    #
+    # # 打印原始数据和降采样后数据的形状
+    # print("Original data shape:", data.shape)
+    # print("Downsampled data shape:", downsampled_data.shape)
+    #
+    # # 可视化一个原始波形和降采样后的波形
+    # # plt.figure(figsize=(10, 4))
+    # # plt.subplot(1, 2, 1)
+    # # plt.plot(data[0])
+    # # plt.title("Original Waveform")
+    # # plt.subplot(1, 2, 2)
+    # # plt.plot(downsampled_data[0])
+    # # plt.title("Downsampled Waveform")
+    # # plt.show()
+    # data = downsampled_data
 
     # 使用 PCA 进行降维
     pca = PCA(n_components=compression_rate)
-    compressed_data = pca.fit_transform(data)
+    compressed_data = pca.fit_transform(data) # data
 
     # 保存压缩后的数据和 PCA 对象
     np.savez(output_file, compressed_data=compressed_data, components=pca.components_, mean=pca.mean_, tracecount=tracecount, samples_per_trace=samples_per_trace, segy_format=segy_format)
@@ -89,7 +151,32 @@ def decompress_segy(input_file, output_file, start_trace, end_trace):
     pca.components_ = components
     pca.mean_ = mean
     reconstructed_data = pca.inverse_transform(compressed_data)
-    print("reconstructed_data.shape: ", reconstructed_data.shape)
+
+    # 插值恢复（升采样）
+    def upsample2d(data, factor):
+        return zoom(data, factor)
+
+    global downsample_factor
+    upsampled_data = upsample2d(reconstructed_data, downsample_factor)
+
+    # 打印恢复后数据的形状
+    print("Upsampled data shape:", upsampled_data.shape)
+    reconstructed_data = upsampled_data
+
+
+    # 降采样恢复
+    # 插值恢复
+    # def upsample(signal, original_length):
+    #     x_original = np.linspace(0, original_length - 1, num=original_length)
+    #     x_downsampled = np.linspace(0, original_length - 1, num=len(signal))
+    #     interpolator = interp1d(x_downsampled, signal, kind='linear')
+    #     return interpolator(x_original)
+    #
+    # global gob_shape
+    # print("gob_shape:",gob_shape)
+    # # 对每个波形进行插值恢复
+    # reconstructed_data = np.array([upsample(waveform, gob_shape[1]) for waveform in reconstructed_data])
+    # print("reconstructed_data.shape: ", reconstructed_data.shape)
 
     # 创建 SEGY 文件规范
     spec = segyio.spec()

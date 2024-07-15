@@ -24,6 +24,8 @@ import joblib
 tracecount = -1
 gob_shape = (-1, -1)
 downsample_factor = 8
+gob_data_min = 0
+gob_data_max = 0
 pca_model_file = r"PCA_Model.pkl"
 
 def read_grid_file(grid_file):
@@ -109,6 +111,22 @@ def compress_segy(input_file, output_file, compression_rate):
     # 对二维数据进行PCA压缩
     compressed_data, pca = pca_compress(data, n_components=85)
     print("pca data shape:", compressed_data.shape)
+
+    def quantize_data(data, num_bits=8):
+        # 将数据归一化到 [0, 1]
+        data_min = np.min(data)
+        data_max = np.max(data)
+        normalized_data = (data - data_min) / (data_max - data_min)
+
+        # 量化数据到 [0, 2^num_bits - 1]
+        quantized_data = np.round(normalized_data * (2 ** num_bits - 1)).astype(np.uint8)
+
+        return quantized_data, data_min, data_max
+
+    #量化压缩后的数据
+    global gob_data_min, gob_data_max
+    compressed_data, gob_data_min, gob_data_max = quantize_data(compressed_data, num_bits=8)
+
     # 存储压缩后的数据和PCA模型
     np.savez(output_file, compressed_data=compressed_data, components=pca.components_, mean=pca.mean_,tracecount=tracecount, samples_per_trace=samples_per_trace, segy_format=segy_format)
 
@@ -138,6 +156,19 @@ def decompress_segy(input_file, output_file, start_trace, end_trace):
     tracecount = npzfile['tracecount']
     samples_per_trace = npzfile['samples_per_trace']
     segy_format = npzfile['segy_format']
+
+    def decompress_and_dequantize_data(quantized_data, data_min, data_max, num_bits=8):
+        # 将量化数据还原到 [0, 1]
+        normalized_data = quantized_data.astype(np.float32) / (2 ** num_bits - 1)
+
+        # 还原数据到原始范围
+        data = normalized_data * (data_max - data_min) + data_min
+
+        return data
+
+    # 还原量化后的数据
+    global gob_data_min, gob_data_max
+    compressed_data = decompress_and_dequantize_data(compressed_data, gob_data_min, gob_data_max, num_bits=8)
 
     # 加载压缩后的数据和PCA模型
     pca = joblib.load(pca_model_file)
@@ -253,5 +284,3 @@ if __name__ == "__main__":
     print("begin-----------------")
 
     fun_main()
-
-    test = 1

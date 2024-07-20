@@ -18,6 +18,8 @@ import pywt
 import joblib
 
 '''
+问题：1.compression_rate 没用了，之前是按pca成分百分比保留的  --其实 100是保留主成分数，0.95是按方差保留
+
 设置卷积核，降采样，pca特征保留率
 '''
 
@@ -88,6 +90,22 @@ def compress_segy(input_file, output_file, compression_rate):
         gob_shape = data.shape
         print("compress--- gob_shape:", gob_shape)
 
+    def quantize_data(data, num_bits=8):
+        # 将数据归一化到 [0, 1]
+        data_min = np.min(data)
+        data_max = np.max(data)
+        normalized_data = (data - data_min) / (data_max - data_min)
+
+        # 量化数据到 [0, 2^num_bits - 1]
+        quantized_data = np.round(normalized_data * (2 ** num_bits - 1)).astype(np.uint8)
+
+        return quantized_data, data_min, data_max
+
+    # #量化压缩后的数据
+    # global gob_data_min, gob_data_max
+    # data, gob_data_min, gob_data_max = quantize_data(data, num_bits=8)
+
+
     # 定义卷积核
     kernel_size = 8
     kernel = np.ones((kernel_size, kernel_size)) / (kernel_size * kernel_size)
@@ -112,16 +130,6 @@ def compress_segy(input_file, output_file, compression_rate):
     compressed_data, pca = pca_compress(data, n_components=85)
     print("pca data shape:", compressed_data.shape)
 
-    def quantize_data(data, num_bits=8):
-        # 将数据归一化到 [0, 1]
-        data_min = np.min(data)
-        data_max = np.max(data)
-        normalized_data = (data - data_min) / (data_max - data_min)
-
-        # 量化数据到 [0, 2^num_bits - 1]
-        quantized_data = np.round(normalized_data * (2 ** num_bits - 1)).astype(np.uint8)
-
-        return quantized_data, data_min, data_max
 
     #量化压缩后的数据
     global gob_data_min, gob_data_max
@@ -166,7 +174,7 @@ def decompress_segy(input_file, output_file, start_trace, end_trace):
 
         return data
 
-    # 还原量化后的数据
+    # # 还原量化后的数据
     global gob_data_min, gob_data_max
     compressed_data = decompress_and_dequantize_data(compressed_data, gob_data_min, gob_data_max, num_bits=8)
 
@@ -197,9 +205,12 @@ def decompress_segy(input_file, output_file, start_trace, end_trace):
 
         return upsampled_data
 
-    # global downsample_factor
     # upsampled_data = upsample2d(reconstructed_data, downsample_factor)
     upsampled_data = upsample(reconstructed_data, downsample_factor, gob_shape)
+
+    # 还原量化后的数据
+    # global gob_data_min, gob_data_max
+    # upsampled_data = decompress_and_dequantize_data(upsampled_data, gob_data_min, gob_data_max, num_bits=8)
 
     # 打印恢复后数据的形状
     print("Upsampled data shape:", upsampled_data.shape)
@@ -213,12 +224,7 @@ def decompress_segy(input_file, output_file, start_trace, end_trace):
 
     # 保存解压缩后的数据
     with segyio.create(output_file, spec) as segy_file:
-        segy_file.trace = reconstructed_data[start_trace:end_trace]#(210000, 2001)
-        # segy_file.trace = reconstructed_data[:]
-    # 保存解压缩后的数据
-    # with segyio.create(output_file, spec) as segy_file:
-    #     for i in range(start_trace - 1, end_trace):
-    #         segy_file.trace[i - (start_trace - 1)] = reconstructed_data[i]
+        segy_file.trace = reconstructed_data
 
 
 def plot_data(original_data, decompressed_data, start_trace, end_trace):
@@ -268,16 +274,16 @@ def fun_main(): # 主函数
     end_trace = tracecount #int(tracecount / 5)
     decompress_segy(comp_file, output_file, start_trace, end_trace)
 
-    # 加载原始数据
-    with segyio.open(ori_file, ignore_geometry=True) as segy_file:
-        original_data = segy_file.trace.raw[:]
-
-    # 解压缩数据
-    with segyio.open(output_file, ignore_geometry=True) as segy_file:
-        decompressed_data = segy_file.trace.raw[:]
-
-    # 绘制原始数据和解压缩后的数据
-    plot_data(original_data, decompressed_data, start_trace, end_trace)
+    # # 加载原始数据
+    # with segyio.open(ori_file, ignore_geometry=True) as segy_file:
+    #     original_data = segy_file.trace.raw[:]
+    #
+    # # 解压缩数据
+    # with segyio.open(output_file, ignore_geometry=True) as segy_file:
+    #     decompressed_data = segy_file.trace.raw[:]
+    #
+    # # 绘制原始数据和解压缩后的数据
+    # plot_data(original_data, decompressed_data, start_trace, end_trace)
     print("main over")
 
 if __name__ == "__main__":

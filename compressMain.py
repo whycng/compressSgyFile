@@ -19,7 +19,7 @@ import joblib
 import cv2
 
 '''
-设置卷积核，降采样，pca特征保留率
+
 '''
 
 gob_pad_h = -1
@@ -55,7 +55,8 @@ def decompress_and_dequantize_data(quantized_data, data_min, data_max, num_bits=
 
 def load_and_reshape_binary_data(file_path, interval=2001):
     """
-    从二进制文件中读取数据，每隔2001个数据为一列数据，最终形成形状为 (210000, 2001) 的数据
+    从二进制文件中读取数据，每隔 interval 个数据为一列数据，最终形成形状为 (x, interval) 的数据。
+    读取的数据行数 x 是动态的，取决于数据总长度是否能被 interval 整除。如果不能整除，则报错。
     """
     try:
         # 读取二进制文件中的所有数据
@@ -63,11 +64,16 @@ def load_and_reshape_binary_data(file_path, interval=2001):
 
         # 检查数据长度是否符合预期
         total_data_points = data.size
-        expected_length = 210000 * interval
-        assert total_data_points == expected_length, f"数据长度不符合预期，期望 {expected_length} 个数据点，实际 {total_data_points} 个数据点"
 
-        # 重塑数据为 (210000, 2001)
-        reshaped_data = data.reshape(-1, interval)
+        # 计算行数
+        num_rows = total_data_points // interval
+
+        # 如果数据长度不能被 interval 整除，则报错
+        if total_data_points % interval != 0:
+            raise ValueError(f"数据长度 {total_data_points} 不能被 {interval} 整除，无法整形成形状为 (x, {interval}) 的数组")
+
+        # 重塑数据为 (x, interval)
+        reshaped_data = data.reshape(num_rows, interval)
 
         # 返回重塑后的数据
         return reshaped_data
@@ -77,12 +83,9 @@ def load_and_reshape_binary_data(file_path, interval=2001):
 
 def save_data_as_binary(data, file_path):
     """
-    将二维numpy数组按原来的方式（每2001个数据为一列）写回二进制文件
+    将二维numpy数组按原来的方式（每 interval 个数据为一列）写回二进制文件。
     """
     try:
-        # 确保数据的形状是 (210000, 2001)
-        assert data.shape == (210000, 2001), "数据形状必须是 (210000, 2001)"
-
         # 确保数据类型是 float32
         data = data.astype(np.float32)
 
@@ -106,46 +109,15 @@ def compress_segy(input_file, output_file, compression_rate):
 
     # 加载数据
     data = load_and_reshape_binary_data(input_file)
-    # data = data.T
     if data is not None:
         print(f"Data shape: {data.shape}")  # 打印数据的形状
     gob_shape = data.shape
 
-    # 定义高斯卷积核
-    def gaussian_kernel(size, sigma=1):
-        kernel = np.fromfunction(
-            lambda x, y: (1 / (2 * np.pi * sigma ** 2)) * np.exp(
-                - ((x - (size - 1) / 2) ** 2 + (y - (size - 1) / 2) ** 2) / (2 * sigma ** 2)
-            ), (size, size)
-        )
-        return kernel / np.sum(kernel)
-
-    # 定义卷积核
-    global kernel_size
-    sigma = 1
-    kernel = gaussian_kernel(kernel_size, sigma)
-    # kernel = np.ones((kernel_size, kernel_size)) / (kernel_size * kernel_size)
-
-    # 对数据进行双边滤波（边缘保留滤波）
-    # data = cv2.bilateralFilter(data.astype(np.float32), d=9, sigmaColor=75, sigmaSpace=75)
-
-    # 对数据进行2D卷积（平滑处理）
-    # data = convolve2d(data, kernel, mode='same', boundary='wrap')
-
-    # 降采样
-    def downsample2d(data, factor):
-        return data[::factor, ::factor]
 
     # 降采样
     def downsample2d_cv(data, factor):
         return cv2.resize(data, (data.shape[1] // factor, data.shape[0] // factor), interpolation=cv2.INTER_CUBIC)
 
-    # 降采样函数
-    def downsample(data, factor):
-        (h, w) = data.shape
-        reshaped = data.reshape(h // factor, factor, w // factor, factor)
-        downsampled = reshaped.mean(axis=(1, 3))
-        return downsampled
 
     # 边缘填充函数
     def pad_data(data, factor):
@@ -160,9 +132,7 @@ def compress_segy(input_file, output_file, compression_rate):
     data, gob_pad_h, gob_pad_w = pad_data(data, downsample_factor)
 
     # 降采样
-    data = downsample(data, downsample_factor) # 只是不使用cv2库
-    # data = downsample2d_cv(data, downsample_factor)
-    # data = downsample2d(data, downsample_factor)
+    data = downsample2d_cv(data, downsample_factor)
 
     # 打印原始数据和平滑后数据、降采样后数据的形状
     print("降采样 data shape:", data.shape)
@@ -218,64 +188,17 @@ def decompress_segy(input_file, output_file, start_trace, end_trace):
     reconstructed_data = pca.inverse_transform(compressed_subset)
     print(f"Reconstructed data shape: {reconstructed_data.shape}")
 
-    # 插值恢复（升采样）
-    def upsample2d(data, factor):
-        return zoom(data, factor)
-
-    def upsample(data, factor, pad_h, pad_w):
-        # # 边缘扩展
-        # def pad_edges(data, pad_width):
-        #     return np.pad(data, pad_width, mode='reflect')
-        #
-        # # 计算填充宽度
-        # pad_width = ((factor - 1) // 2, (factor - 1) // 2)
-        #
-        # # 边缘扩展
-        # data = pad_edges(data, pad_width)
-
-        # 使用缩放因子进行插值（双三次插值）
-        upsampled_data = zoom(data, (factor, factor), order=3)  # order=3 表示使用双三次插值
-
-        # 使用缩放因子进行插值
-        # upsampled_data = zoom(data, (factor, factor), order=1)
-
-        # 计算裁剪的边界
-        crop_h = (pad_h + 1) // 2
-        crop_w = (pad_w + 1) // 2
-        # 裁剪掉填充部分，使得尺寸还原到开始的形状
-        upsampled_data = upsampled_data[crop_h:upsampled_data.shape[0] - (pad_h - crop_h),
-                    crop_w:upsampled_data.shape[1] - (pad_w - crop_w)]
-
-        # # 修剪或填充数据以匹配原始形状
-        # upsampled_data = upsampled_data[:original_shape[0], :original_shape[1]]
-
-        # # 修剪或填充数据以匹配原始形状
-        # start_x = (upsampled_data.shape[0] - original_shape[0]) // 2
-        # start_y = (upsampled_data.shape[1] - original_shape[1]) // 2
-        # upsampled_data = upsampled_data[start_x:start_x + original_shape[0], start_y:start_y + original_shape[1]]
-
-        return upsampled_data
-
     # 升采样 多尺度金字塔方法
     def upsample_cv(data, factor, original_shape):
-        upsampled_data = cv2.resize(data, (original_shape[1], original_shape[0]), interpolation=cv2.INTER_LINEAR)
+        upsampled_data = cv2.resize(data, (original_shape[1], original_shape[0]), interpolation=cv2.INTER_CUBIC)
         return upsampled_data
 
-    def upsample_test(data, factor, pad_h, pad_w):
-        upsampled = np.repeat(np.repeat(data, factor, axis=0), factor, axis=1)
-        # 计算裁剪的边界
-        crop_h = (pad_h + 1) // 2
-        crop_w = (pad_w + 1) // 2
-        # 裁剪掉填充部分，使得尺寸还原到开始的形状
-        upsampled = upsampled[crop_h:upsampled.shape[0] - (pad_h - crop_h),
-                    crop_w:upsampled.shape[1] - (pad_w - crop_w)]
-        return upsampled
 
     global gob_pad_h, gob_pad_w
     print(f"升采样 Reconstructed data shape: {reconstructed_data.shape}", "gob_pad_h:", gob_pad_h, "gob_pad_w:", gob_pad_w)
     #升采样
-    upsampled_data = upsample(reconstructed_data, downsample_factor, gob_pad_h, gob_pad_w)
-    # upsampled_data = upsample_cv(reconstructed_data, downsample_factor, gob_shape)
+    # upsampled_data = upsample(reconstructed_data, downsample_factor, gob_pad_h, gob_pad_w)
+    upsampled_data = upsample_cv(reconstructed_data, downsample_factor, gob_shape)
 
     # 打印恢复后数据的形状
     print("Upsampled data shape:", upsampled_data.shape)
@@ -283,8 +206,7 @@ def decompress_segy(input_file, output_file, start_trace, end_trace):
 
     # 将数组存储到本地文件中
     save_data_as_binary(reconstructed_data, output_file)
-    # np.save('reconstructed_data.dat', reconstructed_data)
-    return reconstructed_data
+
 
 
 def plot_data(original_data, decompressed_data, start_trace, end_trace):
@@ -322,17 +244,16 @@ def fun_main(): # 主函数
     compression_rate = 0.95 # 保留 95% 的特征
     compress_segy(ori_file, comp_file, compression_rate)
 
-    output_file = 'decompressed_data.dat'
+    output_file = r"E:\app\TOOLS4\virtualBoxSharedDir\Volume.part000"
     start_trace = 0
     end_trace =  gob_shape[0] #int(tracecount / 5)
-    decompressed_data = decompress_segy(comp_file, output_file, start_trace, end_trace)
-    # original_data = np.load("post_data.dat")
+    decompress_segy(comp_file, output_file, start_trace, end_trace)
 
+    # 不需要，在geoeast绘图
     # 绘制原始数据和解压缩后的数据
     # plot_data(original_data, decompressed_data, start_trace, end_trace)
-    print("main over")
+    print("main over-------------------")
 
 if __name__ == "__main__":
     print("begin-----------------")
-
     fun_main()

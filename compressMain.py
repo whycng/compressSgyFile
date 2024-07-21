@@ -1,3 +1,5 @@
+import argparse
+
 import numpy as np
 import pandas as pd
 from sklearn.decomposition import PCA,SparseCoder
@@ -22,14 +24,13 @@ import cv2
 
 '''
 
-gob_pad_h = -1
-gob_pad_w = -1
-gob_shape = (-1, -1)
-kernel_size = 3
-downsample_factor = 3
-gob_data_min = 0
-gob_data_max = 0
-pca_model_file = r"PCA_Model.pkl"
+# downsample_factor = 3 # 降采样因子
+
+gob_pad_h = -1 # 填充高，用于降采样和升采样
+gob_pad_w = -1 # 填充宽，用于降采样和升采样
+gob_shape = (-1, -1) # 压缩前数据形状，用于降采样和升采样
+gob_data_min = 0 # 数据最小值，用于量化
+gob_data_max = 0 # 数据最大值，用于量化
 
 # 量化
 def quantize_data(data, num_bits=8):
@@ -102,24 +103,59 @@ def pca_compress(data, n_components):
     compressed_data = pca.fit_transform(data)
     return compressed_data, pca
 
-def compress_segy(input_file, output_file, compression_rate):
-    """
-    """
-    global pca_model_file,gob_shape
 
+def process_data(input_file, interval, start_trace="start_trace", end_trace="end_trace"):
+    """
+    加载并处理数据，返回处理后的数据。
+
+    参数:
+        input_file (str): 输入文件路径
+        interval (int): 采样点个数
+        start_trace (int or str): 起始道（可以是整数或字符串 "start_trace" 表示默认值）
+        end_trace (int or str): 终止道（可以是整数或字符串 "end_trace" 表示默认值）
+
+    返回:
+        data (ndarray): 处理后的数据
+    """
     # 加载数据
-    data = load_and_reshape_binary_data(input_file)
-    if data is not None:
-        print(f"Data shape: {data.shape}")  # 打印数据的形状
+    data = load_and_reshape_binary_data(input_file, interval=interval)
+
+    # 设置默认的起始和终止行
+    if start_trace == "start_trace":
+        start_trace = 0
+    if end_trace == "end_trace":
+        end_trace = data.shape[0]
+
+    # 检查起始和终止行是否越界
+    if start_trace < 0 or end_trace > data.shape[0] or start_trace >= end_trace:
+        raise ValueError("起始或终止行数越界或不合理")
+
+    data = data[start_trace:end_trace]
+
+    # 将数组存储到本地文件中
+    # save_data_as_binary(data, "test_data_save.npy")
+
+    global gob_shape
     gob_shape = data.shape
 
+    if data is not None:
+        print(f"Data shape: {data.shape}")  # 打印数据的形状
 
-    # 降采样
-    def downsample2d_cv(data, factor):
-        return cv2.resize(data, (data.shape[1] // factor, data.shape[0] // factor), interpolation=cv2.INTER_CUBIC)
+    return data,start_trace,end_trace
 
+def pad_and_downsample(data, downsample_factor):
+    """
+    对数据进行边缘填充和降采样。
 
-    # 边缘填充函数
+    参数:
+        data (ndarray): 输入数据
+        downsample_factor (int): 降采样因子
+
+    返回:
+        data (ndarray): 处理后的数据
+        pad_h (int): 填充的行数
+        pad_w (int): 填充的列数
+    """
     def pad_data(data, factor):
         h, w = data.shape
         pad_h = (factor - (h % factor)) % factor
@@ -127,33 +163,99 @@ def compress_segy(input_file, output_file, compression_rate):
         padded_data = np.pad(data, ((0, pad_h), (0, pad_w)), mode='constant', constant_values=0)
         return padded_data, pad_h, pad_w
 
-    global downsample_factor, gob_pad_h, gob_pad_w  # 降采样因子
     # 填充边缘
-    data, gob_pad_h, gob_pad_w = pad_data(data, downsample_factor)
+    data, pad_h, pad_w = pad_data(data, downsample_factor)
+
+    # 降采样
+    def downsample2d_cv(data, factor):
+        return cv2.resize(data, (data.shape[1] // factor, data.shape[0] // factor), interpolation=cv2.INTER_CUBIC)
 
     # 降采样
     data = downsample2d_cv(data, downsample_factor)
 
-    # 打印原始数据和平滑后数据、降采样后数据的形状
+    # 打印降采样后数据的形状
     print("降采样 data shape:", data.shape)
 
+    return data, pad_h, pad_w
+
+def save_compressed_data_and_pca(output_file, compressed_data, pca):
+    """
+    存储压缩后的数据和 PCA 模型到一个文件。
+
+    参数:
+        output_file (str): 输出文件路径
+        compressed_data (ndarray): 压缩后的数据
+        pca (PCA): 训练好的 PCA 模型
+    """
+    # 使用 io.BytesIO 将 PCA 模型序列化为字节流
+    pca_bytes = io.BytesIO()
+    joblib.dump(pca, pca_bytes)
+    pca_bytes.seek(0)
+
+    # 调试信息
+    print("压缩数据形状:", compressed_data.shape)
+    print("PCA 字节流长度:", len(pca_bytes.getvalue()))
+
+    # 将压缩数据和 PCA 模型存储在一个 npz 文件中
+    np.savez(output_file, compressed_data=compressed_data, pca_model=pca_bytes.getvalue())
+
+    # 验证文件内容
+    with np.load(output_file, allow_pickle=True) as data:
+        print("存储文件中的键名:", data.files)
+
+def load_compressed_data_and_pca(input_file):
+    """
+    从文件中加载压缩后的数据和 PCA 模型。
+
+    参数:
+        input_file (str): 输入文件路径
+
+    返回:
+        compressed_data (ndarray): 压缩后的数据
+        pca (PCA): 训练好的 PCA 模型
+    """
+    # 验证文件内容
+    with np.load(input_file, allow_pickle=True) as data:
+        print("<load_compressed_data_and_pca>存储文件中的键名:", data.files,"input_file:",input_file)
+
+    # 从 npz 文件中加载数据
+    npzfile = np.load(input_file, allow_pickle=True)
+    print(npzfile.files)  # 打印存储在 npz 文件中的所有键名
+
+    compressed_data = npzfile['compressed_data']
+
+    # 从字节流中反序列化 PCA 模型
+    pca_bytes = io.BytesIO(npzfile['pca_model'])
+    pca = joblib.load(pca_bytes)
+
+    return compressed_data, pca
+
+def compress_segy(input_file, output_file, compression_PCArate ,start_trace,end_trace, interval, downsample_factor):
+    """
+    """
+    #加载并处理数据
+    data, start_trace, end_trace = process_data(input_file, interval, start_trace, end_trace)
+
+    global gob_pad_h, gob_pad_w #,downsample_factor
+    # 降采样
+    data,  gob_pad_h, gob_pad_w = pad_and_downsample(data, downsample_factor)
+
     # 对二维数据进行PCA压缩
-    compressed_data, pca = pca_compress(data, n_components=compression_rate)
+    compressed_data, pca = pca_compress(data, n_components=compression_PCArate)
     print("pca data shape:", compressed_data.shape)
 
     #量化压缩后的数据
     global gob_data_min, gob_data_max
     compressed_data, gob_data_min, gob_data_max = quantize_data(compressed_data, num_bits=8)
 
-    # 存储压缩后的数据和PCA模型
-    np.savez(output_file, compressed_data=compressed_data )
+    # 保存压缩数据和 PCA 模型
+    save_compressed_data_and_pca(output_file, compressed_data, pca)
 
-    joblib.dump(pca, pca_model_file)
     print(f"Compressed data saved to {output_file}")
-    print(f"PCA model saved to {pca_model_file}")
+    return start_trace, end_trace
 
 
-def decompress_segy(input_file, output_file, start_trace, end_trace):
+def decompress_segy(input_file, output_file, start_trace, end_trace, downsample_factor):
     """
     解压缩 SEGY 数据。
 
@@ -164,21 +266,14 @@ def decompress_segy(input_file, output_file, start_trace, end_trace):
         end_trace: 解压缩的结束道号。
     """
 
-    global pca_model_file
-
-    # 加载压缩后的数据和 PCA 对象
-    npzfile = np.load(input_file)
-    compressed_data = npzfile['compressed_data']
+    # 加载压缩数据和 PCA 模型
+    compressed_data, pca = load_compressed_data_and_pca(input_file)
 
     # 还原量化后的数据
     global gob_data_min, gob_data_max
     compressed_data = decompress_and_dequantize_data(compressed_data, gob_data_min, gob_data_max, num_bits=8)
 
-    # 加载压缩后的数据和PCA模型
-    pca = joblib.load(pca_model_file)
-    print(f"Loaded compressed data shape: {compressed_data.shape}")
-
-    global downsample_factor
+    # global downsample_factor
     # 提取指定范围的道
     compressed_subset = compressed_data[(start_trace // downsample_factor) : ((end_trace // downsample_factor) + 1)]
     # compressed_subset = compressed_data[start_trace:end_trace]
@@ -192,20 +287,16 @@ def decompress_segy(input_file, output_file, start_trace, end_trace):
     def upsample_cv(data, factor, original_shape):
         upsampled_data = cv2.resize(data, (original_shape[1], original_shape[0]), interpolation=cv2.INTER_CUBIC)
         return upsampled_data
-
-
     global gob_pad_h, gob_pad_w
-    print(f"升采样 Reconstructed data shape: {reconstructed_data.shape}", "gob_pad_h:", gob_pad_h, "gob_pad_w:", gob_pad_w)
     #升采样
-    # upsampled_data = upsample(reconstructed_data, downsample_factor, gob_pad_h, gob_pad_w)
-    upsampled_data = upsample_cv(reconstructed_data, downsample_factor, gob_shape)
-
+    reconstructed_data = upsample_cv(reconstructed_data, downsample_factor, gob_shape)
     # 打印恢复后数据的形状
-    print("Upsampled data shape:", upsampled_data.shape)
-    reconstructed_data = upsampled_data #.T
+    print("Upsampled data shape:", reconstructed_data.shape)
 
     # 将数组存储到本地文件中
     save_data_as_binary(reconstructed_data, output_file)
+
+
 
 
 
@@ -237,23 +328,102 @@ def plot_data(original_data, decompressed_data, start_trace, end_trace):
     plt.show()
 
 def fun_main(): # 主函数
-    global gob_shape
+
+    '''
+    压缩模式1：compress1 inFileName  outFileName startTrace endTrace interval PCA压缩率 downsample_factor
+    压缩模式2：compress2 inFileName  outFileName startTrace endTrace compressionRate
+
+    '''
 
     ori_file = r"E:\app\TOOLS4\virtualBoxSharedDir\原始数据\Volume_OriFile.part000"
     comp_file = 'compressed_segy_data.npz'
-    compression_rate = 0.95 # 保留 95% 的特征
-    compress_segy(ori_file, comp_file, compression_rate)
-
     output_file = r"E:\app\TOOLS4\virtualBoxSharedDir\Volume.part000"
-    start_trace = 0
-    end_trace =  gob_shape[0] #int(tracecount / 5)
-    decompress_segy(comp_file, output_file, start_trace, end_trace)
 
-    # 不需要，在geoeast绘图
-    # 绘制原始数据和解压缩后的数据
-    # plot_data(original_data, decompressed_data, start_trace, end_trace)
-    print("main over-------------------")
+    # global downsample_factor
+    downsample_factor = 3 # 降采样因子
+    compression_PCArate = 0.95 # pca 保留 95% 的特征
+    start_trace = 'start_trace' #起始道
+    end_trace = 'end_trace' #终止道
+
+    interval = 2001 #采样点个数
+
+    # 压缩模式1
+    start_trace, end_trace = compress_segy(ori_file, comp_file, compression_PCArate, start_trace, end_trace, interval, downsample_factor)
+    # 解压缩模式1
+    decompress_segy(comp_file, output_file, start_trace, end_trace, downsample_factor)
+
+    print("---------------main over-------------------")
+
+
+def main():
+    '''
+    compress1 inFileName  outFileName startTrace endTrace interval PCA压缩率 downsample_factor
+    compress2 inFileName  outFileName startTrace endTrace compressionRate
+
+    :return:
+    '''
+
+    parser = argparse.ArgumentParser(description="SEGY File Compression and Decompression")
+
+    subparsers = parser.add_subparsers(dest='command')
+
+    # 压缩模式1的命令行参数
+    parser_compress1 = subparsers.add_parser('compress1', help='Compress SEGY file using PCA')
+    parser_compress1.add_argument('inFileName', type=str, help='Input SEGY file name')
+    parser_compress1.add_argument('outFileName', type=str, help='Output compressed file name')
+    parser_compress1.add_argument('startTrace', type=int, help='Start trace number')
+    parser_compress1.add_argument('endTrace', type=int, help='End trace number')
+    parser_compress1.add_argument('interval', type=int, help='Number of samples per trace')
+    parser_compress1.add_argument('PCArate', type=float, help='PCA compression rate')
+
+    # 压缩模式2的命令行参数
+    parser_compress2 = subparsers.add_parser('compress2', help='Compress SEGY file using a different method')
+    parser_compress2.add_argument('inFileName', type=str, help='Input SEGY file name')
+    parser_compress2.add_argument('outFileName', type=str, help='Output compressed file name')
+    parser_compress2.add_argument('startTrace', type=int, help='Start trace number')
+    parser_compress2.add_argument('endTrace', type=int, help='End trace number')
+    parser_compress2.add_argument('compressionRate', type=float, help='Compression rate')
+
+    # 解压缩模式1的命令行参数
+    parser_decompress1 = subparsers.add_parser('decompress1', help='Decompress SEGY file')
+    parser_decompress1.add_argument('inFileName', type=str, help='Input compressed file name')
+    parser_decompress1.add_argument('outFileName', type=str, help='Output SEGY file name')
+    parser_decompress1.add_argument('startTrace', type=int, help='Start trace number')
+    parser_decompress1.add_argument('endTrace', type=int, help='End trace number')
+
+    # 解压缩模式2的命令行参数
+    parser_decompress2 = subparsers.add_parser('decompress2', help='Decompress SEGY file')
+    parser_decompress2.add_argument('inFileName', type=str, help='Input compressed file name')
+    parser_decompress2.add_argument('outFileName', type=str, help='Output SEGY file name')
+    parser_decompress2.add_argument('startTrace', type=int, help='Start trace number')
+    parser_decompress2.add_argument('endTrace', type=int, help='End trace number')
+
+    while True:
+        try:
+            user_input = input("Enter command: ").split()
+            if len(user_input) == 0:
+                continue
+            args = parser.parse_args(user_input)
+
+            if args.command == 'compress1':
+                compress_segy(args.inFileName, args.outFileName, args.PCArate, args.startTrace, args.endTrace,
+                              args.interval)
+            elif args.command == 'compress2':
+                # Implement compress2 function
+                pass
+            elif args.command == 'decompress1':
+                decompress_segy(args.inFileName, args.outFileName, args.startTrace, args.endTrace)
+            elif args.command == 'decompress2':
+                decompress_segy(args.inFileName, args.outFileName, args.startTrace, args.endTrace)
+            else:
+                print("Invalid command. Please use 'compress1', 'compress2', 'decompress1',or 'decompress2'.")
+        except (SystemExit, KeyboardInterrupt):
+            print("Exiting...")
+            break
+        except Exception as e:
+            print(f"Error: {e}")
 
 if __name__ == "__main__":
-    print("begin-----------------")
+    print("------------------begin-----------------")
     fun_main()
+    # main()

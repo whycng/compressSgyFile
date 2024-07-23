@@ -17,6 +17,7 @@ python 3.11
     - start_trace = 0 起始道
     - end_trace = 210000  终止道
     - interval = 2001 每道采样点个数 
+
 2. 压缩算法2
     - chunk_size = end_trace // 100 分批次处理
     - shorld = 0.1 傅里叶变换的阈值

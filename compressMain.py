@@ -1,7 +1,7 @@
 import argparse
 import sys
 
-import numpy as np 
+import numpy as np
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
 import io
@@ -374,6 +374,9 @@ def compress_wf(input_file, output_file, shorld, start_trace, end_trace, interva
     print("chunk_size:",chunk_size)
 
     with open(output_file, 'wb') as f:
+        # 写入 interval 变量到文件
+        pickle.dump(interval, f)
+
         for data, start, end in process_data_in_chunks(input_file, interval, start_trace, end_trace, chunk_size):
 
             print("data shape",data.shape)
@@ -409,7 +412,7 @@ def compress_wf(input_file, output_file, shorld, start_trace, end_trace, interva
     return start_trace, end_trace
 
 
-def decompress_wf(input_file, output_file, start_trace, end_trace, interval, num_bits=8):
+def decompress_wf(input_file, output_file, start_trace, end_trace, num_bits=8):
 
     traces_processed = 0
     chunk_n = 0
@@ -418,6 +421,7 @@ def decompress_wf(input_file, output_file, start_trace, end_trace, interval, num
         pass  # 清空文件内容
 
     with open(input_file, 'rb') as f:
+        interval = pickle.load(f)
         try:
             while True :
                 print("chunk_n:", chunk_n)
@@ -543,17 +547,19 @@ def fun_main(): # 主函数
     start_trace = 0 #起始道
     end_trace = 210000  #终止道
     interval = 2001 #采样点个数
+
+
+    # # 压缩模式1
+    # start_trace, end_trace = compress_segy(ori_file, comp_file, compression_PCArate, start_trace, end_trace, interval, downsample_factor)
+    # # 解压缩模式1
+    # decompress_segy(comp_file, output_file, start_trace, end_trace, downsample_factor)
+
     chunk_size = end_trace // 100
-
-    # 压缩模式1
-    start_trace, end_trace = compress_segy(ori_file, comp_file, compression_PCArate, start_trace, end_trace, interval, downsample_factor)
-    # 解压缩模式1
-    decompress_segy(comp_file, output_file, start_trace, end_trace, downsample_factor)
-
-    # # 压缩模式2
-    # start_trace, end_trace = compress_wf(ori_file, comp_file, 0.1, start_trace, end_trace, interval , num_bits=8, chunk_size=chunk_size)
-    # # 解压缩模式2
-    # decompress_wf(comp_file, output_file, end_trace//4, end_trace//2,interval)
+    shorld = 0.1
+    # 压缩模式2
+    start_trace, end_trace = compress_wf(ori_file, comp_file, shorld, start_trace, end_trace, interval , num_bits=8, chunk_size=chunk_size)
+    # 解压缩模式2
+    decompress_wf(comp_file, output_file, end_trace//4, end_trace//2 )
 
 
     print("---------------main over-------------------")
@@ -605,7 +611,6 @@ def main():
     parser_decompress2.add_argument('outFileName', type=str, help='Output SEGY file name')
     parser_decompress2.add_argument('startTrace', type=int, help='Start trace number')
     parser_decompress2.add_argument('endTrace', type=int, help='End trace number')
-    parser_decompress2.add_argument('interval', type=int, help='Number of samples per trace')
 
     while True:
         try:
@@ -624,7 +629,7 @@ def main():
             elif args.command == 'decompress1':
                 decompress_segy(args.inFileName, args.outFileName, args.startTrace, args.endTrace,args.downsample_factor)
             elif args.command == 'decompress2':
-                decompress_wf(args.inFileName, args.outFileName, args.startTrace, args.endTrace, args.interval)
+                decompress_wf(args.inFileName, args.outFileName, args.startTrace, args.endTrace )
             else:
                 print("Invalid command. Please use 'compress1', 'compress2', 'decompress1', or 'decompress2'.")
 
@@ -637,8 +642,8 @@ def main():
 
 if __name__ == "__main__":
     print("------------------begin-----------------")
-    # fun_main()
-    main()
+    fun_main()
+    # main()
 '''
  compress1 E:\app\TOOLS4\virtualBoxSharedDir\原始数据\Volume_OriFile.part000 compressed_segy_data.npz 0 210000 2001 0.95 3
  decompress1 compressed_segy_data.npz E:\app\TOOLS4\virtualBoxSharedDir\Volume.part000 0 210000 3

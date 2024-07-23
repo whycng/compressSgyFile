@@ -648,13 +648,10 @@ if __name__ == "__main__":
  compress1 E:\app\TOOLS4\virtualBoxSharedDir\原始数据\Volume_OriFile.part000 compressed_segy_data.npz 0 210000 2001 0.95 3
  decompress1 compressed_segy_data.npz E:\app\TOOLS4\virtualBoxSharedDir\Volume.part000 0 210000 3
  compress2 E:\app\TOOLS4\virtualBoxSharedDir\原始数据\Volume_OriFile.part000 compressed_segy_data.npz 0 210000 0.1 2001 2100
- decompress2 compressed_segy_data.npz E:\app\TOOLS4\virtualBoxSharedDir\Volume.part000 52500 105000 2001
+ decompress2 compressed_segy_data.npz E:\app\TOOLS4\virtualBoxSharedDir\Volume.part000 52500 105000
 
 
 '''
-
-
-
 
 
 

@@ -15,13 +15,6 @@ from scipy.fft import fft, ifft
 
 '''
 
-# downsample_factor = 3 # 降采样因子
-
-gob_pad_h = -1 # 填充高，用于降采样和升采样
-gob_pad_w = -1 # 填充宽，用于降采样和升采样
-gob_shape = (-1, -1) # 压缩前数据形状，用于降采样和升采样
-gob_data_min = 0 # 数据最小值，用于量化
-gob_data_max = 0 # 数据最大值，用于量化
 
 # 量化
 def quantize_data(data, num_bits=8):
@@ -85,7 +78,10 @@ def save_data_as_binary(data, file_path,mode='wb'):
         with open(file_path, mode) as f:
             data.tofile(f)
 
-        print(f"Data successfully saved to {file_path}")
+        # 计算并打印字节数
+        file_size_bytes = data.nbytes
+        print(f"Data successfully saved to {file_path}, size: {file_size_bytes} bytes")
+
     except Exception as e:
         print(f"An error occurred: {e}")
 
@@ -131,9 +127,6 @@ def process_data(input_file, interval, start_trace="start_trace", end_trace="end
     # 将数组存储到本地文件中
     # save_data_as_binary(data, "test_data_save.npy")
 
-    global gob_shape
-    gob_shape = data.shape
-
     if data is not None:
         print(f"Data shape: {data.shape}")  # 打印数据的形状
 
@@ -172,9 +165,9 @@ def pad_and_downsample(data, downsample_factor):
     # 打印降采样后数据的形状
     print("降采样 data shape:", data.shape)
 
-    return data, pad_h, pad_w
+    return data
 
-def save_compressed_data_and_pca(output_file, compressed_data, pca):
+def save_compressed_data_and_pca(output_file, compressed_data, pca, data_min, data_max, downsample_factor):
     """
     存储压缩后的数据和 PCA 模型到一个文件。
 
@@ -198,8 +191,18 @@ def save_compressed_data_and_pca(output_file, compressed_data, pca):
     compressed_length = len(pca_bytes)
     print("压缩后的 PCA 字节流长度:", compressed_length)
 
+    # 计算 compressed_data, data_min, data_max, downsample_factor 的字节数
+    compressed_data_bytes = compressed_data.nbytes
+    data_min_bytes = data_min.nbytes
+    data_max_bytes = data_max.nbytes
+    downsample_factor_bytes = np.array(downsample_factor).nbytes
+
+    # 计算总字节数
+    total_bytes = compressed_data_bytes + len(pca_bytes) + data_min_bytes + data_max_bytes + downsample_factor_bytes
+    print(f"compressed_data bytes: {compressed_data_bytes}, output_file: {output_file}, total bytes: {total_bytes}")
+
     # 将压缩数据和 PCA 模型存储在一个 npz 文件中
-    np.savez(output_file, compressed_data=compressed_data, pca_model=pca_bytes )
+    np.savez(output_file, compressed_data=compressed_data, pca_model=pca_bytes,data_min=data_min, data_max=data_max, downsample_factor=downsample_factor)
 
     # # 验证文件内容
     # with np.load(output_file, allow_pickle=True) as data:
@@ -225,13 +228,46 @@ def load_compressed_data_and_pca(input_file):
     print(npzfile.files)  # 打印存储在 npz 文件中的所有键名
 
     compressed_data = npzfile['compressed_data']
+    data_min = npzfile['data_min']
+    data_max = npzfile['data_max']
+    downsample_factor = npzfile['downsample_factor']
 
     # 从字节流中反序列化 PCA 模型
     pca_bytes = io.BytesIO(zlib.decompress(npzfile['pca_model']))
     # pca_bytes = io.BytesIO(npzfile['pca_model'])
     pca = joblib.load(pca_bytes)
 
-    return compressed_data, pca
+    return compressed_data, pca,data_min, data_max, downsample_factor
+
+
+
+def resize_matrix(data, newDataShape):
+    m, n = data.shape
+    new_m, new_n = newDataShape
+
+    if new_m > m:
+        # 填充行
+        pad_top = (new_m - m) // 2
+        pad_bottom = new_m - m - pad_top
+        data = np.pad(data, ((pad_top, pad_bottom), (0, 0)), mode='constant', constant_values=0)
+    elif new_m < m:
+        # 削减行
+        cut_top = (m - new_m) // 2
+        cut_bottom = m - new_m - cut_top
+        data = data[cut_top:m-cut_bottom, :]
+
+    if new_n > n:
+        # 填充列
+        pad_left = (new_n - n) // 2
+        pad_right = new_n - n - pad_left
+        data = np.pad(data, ((0, 0), (pad_left, pad_right)), mode='constant', constant_values=0)
+    elif new_n < n:
+        # 削减列
+        cut_left = (n - new_n) // 2
+        cut_right = n - new_n - cut_left
+        data = data[:, cut_left:n-cut_right]
+
+    return data
 
 def compress_segy(input_file, output_file, compression_PCArate ,start_trace,end_trace, interval, downsample_factor=-1):
     """
@@ -240,10 +276,14 @@ def compress_segy(input_file, output_file, compression_PCArate ,start_trace,end_
     #加载并处理数据
     data, start_trace, end_trace = process_data(input_file, interval, start_trace, end_trace)
 
-    global gob_pad_h, gob_pad_w
+
     # 降采样
     if( -1 != downsample_factor): #若启用降采样
-        data, gob_pad_h, gob_pad_w = pad_and_downsample(data, downsample_factor)
+        data = pad_and_downsample(data, downsample_factor)
+        print("填充后的 data shape:", data.shape)
+
+
+
 
     # 对二维数据进行PCA压缩
     compressed_data, pca = pca_compress(data, n_components=compression_PCArate)
@@ -251,8 +291,8 @@ def compress_segy(input_file, output_file, compression_PCArate ,start_trace,end_
     print("compressed_data before kb:", compressed_data.nbytes / 1024)
 
     #量化压缩后的数据
-    global gob_data_min, gob_data_max
-    compressed_data, gob_data_min, gob_data_max = quantize_data(compressed_data, num_bits=8)
+
+    compressed_data, data_min, data_max = quantize_data(compressed_data, num_bits=8)
     print("compressed_data after kb:", compressed_data.nbytes / 1024)
     pca_size_kb = sys.getsizeof(pca) / 1024
     pca_bytes = pca.__sizeof__()
@@ -260,13 +300,13 @@ def compress_segy(input_file, output_file, compression_PCArate ,start_trace,end_
     print("pca kb:", pca_size_kb, " pca_bytes :",pca_bytes , " pca_size_exact:",pca_size_exact )
 
     # 保存压缩数据和 PCA 模型
-    save_compressed_data_and_pca(output_file, compressed_data, pca)
+    save_compressed_data_and_pca(output_file, compressed_data, pca, data_min, data_max, downsample_factor)
 
     print(f"Compressed data saved to {output_file}")
     return start_trace, end_trace
 
 
-def decompress_segy(input_file, output_file, start_trace, end_trace, downsample_factor=-1):
+def decompress_segy(input_file, output_file, start_trace, end_trace ):
     """
     解压缩 SEGY 数据。
 
@@ -278,17 +318,16 @@ def decompress_segy(input_file, output_file, start_trace, end_trace, downsample_
     """
 
     # 加载压缩数据和 PCA 模型
-    compressed_data, pca = load_compressed_data_and_pca(input_file)
+    compressed_data, pca, data_min, data_max , downsample_factor= load_compressed_data_and_pca(input_file)
 
     # 还原量化后的数据
-    global gob_data_min, gob_data_max
-    compressed_data = decompress_and_dequantize_data(compressed_data, gob_data_min, gob_data_max, num_bits=8)
+    compressed_data = decompress_and_dequantize_data(compressed_data, data_min, data_max, num_bits=8)
 
     # 提取指定范围的道
     if (-1 != downsample_factor):
-        compressed_subset = compressed_data[(start_trace // downsample_factor) : ((end_trace // downsample_factor) + 1)]
+        compressed_subset = compressed_data[(start_trace // downsample_factor) : ((end_trace // downsample_factor) )]
         print(f"Compressed subset shape: {compressed_subset.shape}", start_trace // downsample_factor,
-              (end_trace // downsample_factor) + 1, "end_trace:", end_trace)
+              (end_trace // downsample_factor) , "end_trace:", end_trace)
     else:
         compressed_subset = compressed_data[start_trace:end_trace]
 
@@ -297,23 +336,32 @@ def decompress_segy(input_file, output_file, start_trace, end_trace, downsample_
     print(f"Reconstructed data shape: {reconstructed_data.shape}")
 
     # 升采样 多尺度金字塔方法
-    def upsample_cv(data, factor, original_shape):
-        upsampled_data = cv2.resize(data, (original_shape[1], original_shape[0]), interpolation=cv2.INTER_CUBIC)
+    def upsample_cv(data, factor): # 降采样的时候进行了边缘填充，因此升采样按理说可用除尽
+        h = data.shape[0]
+        w = data.shape[1]
+        print("Upsampling data shape:",h * factor, w * factor )
+        upsampled_data = cv2.resize(data, (w * factor, h * factor), interpolation=cv2.INTER_CUBIC)
         return upsampled_data
-    global gob_pad_h, gob_pad_w
+
     #升采样
     if (-1 != downsample_factor): #若启用降采样
-        reconstructed_data = upsample_cv(reconstructed_data, downsample_factor, gob_shape)
+        reconstructed_data = upsample_cv(reconstructed_data, downsample_factor)
     # 打印恢复后数据的形状
     print("Upsampled data shape:", reconstructed_data.shape)
+
+    RszieShape = ( end_trace - start_trace, reconstructed_data.shape[1])
+    # 重新调整数据的形状
+    reconstructed_data = resize_matrix(reconstructed_data, RszieShape)
+    # 打印恢复后数据的形状
+    print("resize data shape:", reconstructed_data.shape)
 
     # 将数组存储到本地文件中
     save_data_as_binary(reconstructed_data, output_file)
 
 
-def quantize(data, num_bits=8):
-    real_part = data.real
-    imag_part = data.imag
+def quantize(data_real, data_imag, num_bits=8):
+    real_part = data_real
+    imag_part = data_imag
 
     real_min, real_max = real_part.min(), real_part.max()
     imag_min, imag_max = imag_part.min(), imag_part.max()
@@ -340,6 +388,8 @@ def dequantize(quantized_real, quantized_imag, real_min, real_max, imag_min, ima
     normalized_real = quantized_real / (2 ** num_bits - 1)
     normalized_imag = quantized_imag / (2 ** num_bits - 1)
 
+    print("<dequantize> normalized_real shape:", normalized_real.shape)
+
     if real_max != real_min:
         real_part = normalized_real * (real_max - real_min) + real_min
     else:
@@ -349,8 +399,8 @@ def dequantize(quantized_real, quantized_imag, real_min, real_max, imag_min, ima
         imag_part = normalized_imag * (imag_max - imag_min) + imag_min
     else:
         imag_part = np.full_like(normalized_imag, imag_min)
-
-    return real_part + 1j * imag_part
+    print("<dequantize> real_part shape:", real_part.shape)
+    return real_part ,imag_part
 
 
 
@@ -390,13 +440,28 @@ def compress_wf(input_file, output_file, shorld, start_trace, end_trace, interva
 
             print("compressed_data.real.tobytes():", len(compressed_data.real.tobytes()))
             print("compressed_data.imag.tobytes():", len(compressed_data.imag.tobytes()))
+            print("傅里叶变换，设定阈值之后的实部 compressed_data.real.shape:", compressed_data.real.shape)
+
+            compressed_real_pca = compressed_data.real
+            compressed_imag_pca = compressed_data.imag
+            # # 在量化之前对 compressed_data 进行 PCA 压缩
+            # global pcaREAL, pcaIMAG, glo_pca
+            # glo_pca = 10
+            # pcaREAL = PCA(n_components=interval//glo_pca)  # 保留 95% 的方差
+            # # pcaIMAG = PCA(n_components=interval//glo_pca)  # 保留 95% 的方差
+            # compressed_real_pca = pcaREAL.fit_transform(compressed_data.real)  # 对实部进行 PCA 压缩
+            # # compressed_imag_pca = pcaIMAG.fit_transform(compressed_data.imag)  # 对虚部进行 PCA 压缩
+            #
+            # print("pca后实部 compressed_data_pca.shape:", compressed_real_pca.shape)
+            # print("compressed_data_pca.tobytes():", len(compressed_real_pca.tobytes()))
 
             # 量化
-            quantized_real, quantized_imag, real_min, real_max, imag_min, imag_max = quantize(compressed_data, num_bits)
+            quantized_real, quantized_imag, real_min, real_max, imag_min, imag_max = quantize(compressed_real_pca, compressed_imag_pca, num_bits)
             real_mins.append(real_min)
             real_maxs.append(real_max)
             imag_mins.append(imag_min)
             imag_maxs.append(imag_max)
+            print("量化之后的实部 quantized_real.shape:", quantized_real.shape)
 
             # 压缩实部和虚部
             compressed_real = zlib.compress(quantized_real.tobytes())
@@ -431,13 +496,15 @@ def decompress_wf(input_file, output_file, start_trace, end_trace, num_bits=8):
                 compressed_real, compressed_imag, real_min, real_max, imag_min, imag_max = pickle.load(f)
                 # print("len compressed_real:", len(compressed_real), " len compressed_imag:", len(compressed_imag))
 
+                global glo_pca
                 # 解压缩并恢复数据形状
-                quantized_real = np.frombuffer(zlib.decompress(compressed_real), dtype=np.uint8).reshape(-1, interval)
-                quantized_imag = np.frombuffer(zlib.decompress(compressed_imag), dtype=np.uint8).reshape(-1, interval)
+                quantized_real = np.frombuffer(zlib.decompress(compressed_real), dtype=np.uint8).reshape(-1, interval   ) # //glo_pca
+                quantized_imag = np.frombuffer(zlib.decompress(compressed_imag), dtype=np.uint8).reshape(-1, interval  ) # //100 pca ues
+                print("解压出来的数据实部quantized_real.shape:", quantized_real.shape)
 
                 traces_per_chunk = quantized_real.shape[0]
 
-                if traces_processed + traces_per_chunk < start_trace:
+                if traces_processed + traces_per_chunk <= start_trace:
                     # 如果当前块在 start_trace 之前，跳过当前块
                     traces_processed += traces_per_chunk
                     continue
@@ -447,13 +514,23 @@ def decompress_wf(input_file, output_file, start_trace, end_trace, num_bits=8):
 
                 # 确定从当前块中提取的范围
                 chunk_start = max(0, start_trace - traces_processed)
-                chunk_end = min(traces_per_chunk, end_trace - traces_processed)
+                chunk_end = min(traces_per_chunk, end_trace - traces_processed + 1)
 
                 quantized_real = quantized_real[chunk_start:chunk_end, :]
                 quantized_imag = quantized_imag[chunk_start:chunk_end, :]
+                print("提取出的quantized_real.shape:", quantized_real.shape,"chunk_start:", chunk_start, "chunk_end:", chunk_end,
+                      " start_trace:", start_trace, "end_trace:", end_trace, "traces_processed:", traces_processed)
 
                 # 反量化
-                data = dequantize(quantized_real, quantized_imag, real_min, real_max, imag_min, imag_max, num_bits)
+                quantized_real,quantized_imag = dequantize(quantized_real, quantized_imag, real_min, real_max, imag_min, imag_max, num_bits)
+                print("反量化之后的数据实部 dequantize quantized_real shape:", quantized_real.shape)
+
+                # Inverse transformation to recover the original compressed data
+                # global pcaREAL, pcaIMAG
+                # quantized_real = pcaREAL.inverse_transform(quantized_real)
+                # # data_imag = pcaIMAG.inverse_transform(data.imag)
+                data = quantized_real + 1j * quantized_imag
+                print("逆变换后的数据实部 data real shape:", data.real.shape)
 
                 # 逆傅里叶变换恢复信号
                 signal_chunk = ifft(data).real
@@ -545,21 +622,22 @@ def fun_main(): # 主函数
     downsample_factor = 3 # 降采样因子
     compression_PCArate = 0.95 # pca 保留 95% 的特征
     start_trace = 0 #起始道
-    end_trace = 210000  #终止道
+    end_trace = 2100  #终止道
     interval = 2001 #采样点个数
 
 
     # # 压缩模式1
     # start_trace, end_trace = compress_segy(ori_file, comp_file, compression_PCArate, start_trace, end_trace, interval, downsample_factor)
     # # 解压缩模式1
-    # decompress_segy(comp_file, output_file, start_trace, end_trace, downsample_factor)
+    # decompress_segy(comp_file, output_file, start_trace, end_trace)
 
-    chunk_size = end_trace // 100
+    chunk_size = end_trace // 10
     shorld = 0.1
     # 压缩模式2
     start_trace, end_trace = compress_wf(ori_file, comp_file, shorld, start_trace, end_trace, interval , num_bits=8, chunk_size=chunk_size)
     # 解压缩模式2
-    decompress_wf(comp_file, output_file, end_trace//4, end_trace//2 )
+    decompress_wf(comp_file, output_file, start_trace, end_trace )
+    # decompress_wf(comp_file, output_file, end_trace // 4, end_trace // 2)
 
 
     print("---------------main over-------------------")
@@ -567,71 +645,42 @@ def fun_main(): # 主函数
 
 def main():
     '''
-    compress1 inFileName  outFileName startTrace endTrace interval PCA压缩率 downsample_factor
-    compress2 inFileName  outFileName startTrace endTrace compressionRate
-    decompress1 inFileName  outFileName startTrace endTrace
-    decompress2 inFileName  outFileName startTrace endTrace
+    compress1 inFileName outFileName startTrace endTrace interval PCArate downsample_factor
+    compress2 inFileName outFileName startTrace endTrace shorld interval chunksize
+    decompress1 inFileName outFileName startTrace endTrace downsample_factor
+    decompress2 inFileName outFileName startTrace endTrace
     '''
-
-    parser = argparse.ArgumentParser(description="SEGY File Compression and Decompression")
-
-    subparsers = parser.add_subparsers(dest='command')
-
-    # 压缩模式1的命令行参数
-    parser_compress1 = subparsers.add_parser('compress1', help='Compress SEGY file using PCA')
-    parser_compress1.add_argument('inFileName', type=str, help='Input SEGY file name')
-    parser_compress1.add_argument('outFileName', type=str, help='Output compressed file name')
-    parser_compress1.add_argument('startTrace', type=int, help='Start trace number')
-    parser_compress1.add_argument('endTrace', type=int, help='End trace number')
-    parser_compress1.add_argument('interval', type=int, help='Number of samples per trace')
-    parser_compress1.add_argument('PCArate', type=float, help='PCA compression rate')
-    parser_compress1.add_argument('downsample_factor', type=int, help='Downsample factor')
-
-    # 压缩模式2的命令行参数
-    parser_compress2 = subparsers.add_parser('compress2', help='Compress SEGY file using a different method')
-    parser_compress2.add_argument('inFileName', type=str, help='Input SEGY file name')
-    parser_compress2.add_argument('outFileName', type=str, help='Output compressed file name')
-    parser_compress2.add_argument('startTrace', type=int, help='Start trace number')
-    parser_compress2.add_argument('endTrace', type=int, help='End trace number')
-    parser_compress2.add_argument('shorld', type=float, help='fft shorld')
-    parser_compress2.add_argument('interval', type=int, help='Number of samples per trace')
-    parser_compress2.add_argument('chunksize', type=int, help='chunksize for fft')
-
-    # 解压缩模式1的命令行参数
-    parser_decompress1 = subparsers.add_parser('decompress1', help='Decompress SEGY file')
-    parser_decompress1.add_argument('inFileName', type=str, help='Input compressed file name')
-    parser_decompress1.add_argument('outFileName', type=str, help='Output SEGY file name')
-    parser_decompress1.add_argument('startTrace', type=int, help='Start trace number')
-    parser_decompress1.add_argument('endTrace', type=int, help='End trace number')
-    parser_decompress1.add_argument('downsample_factor', type=int, help='downsample_factor')
-
-    # 解压缩模式2的命令行参数
-    parser_decompress2 = subparsers.add_parser('decompress2', help='Decompress SEGY file')
-    parser_decompress2.add_argument('inFileName', type=str, help='Input compressed file name')
-    parser_decompress2.add_argument('outFileName', type=str, help='Output SEGY file name')
-    parser_decompress2.add_argument('startTrace', type=int, help='Start trace number')
-    parser_decompress2.add_argument('endTrace', type=int, help='End trace number')
 
     while True:
         try:
             user_input = input("Enter command: ").split()
             if len(user_input) == 0:
                 continue
-            args = parser.parse_args(user_input)
 
-            if args.command == 'compress1':
-                # print(" test compress1")
-                compress_segy(args.inFileName, args.outFileName, args.PCArate, args.startTrace, args.endTrace,
-                              args.interval, args.downsample_factor)
-            elif args.command == 'compress2':
-                compress_wf(args.inFileName, args.outFileName, args.shorld, args.startTrace, args.endTrace,
-                            args.interval, chunk_size=args.chunksize)
-            elif args.command == 'decompress1':
-                decompress_segy(args.inFileName, args.outFileName, args.startTrace, args.endTrace,args.downsample_factor)
-            elif args.command == 'decompress2':
-                decompress_wf(args.inFileName, args.outFileName, args.startTrace, args.endTrace )
+            command = user_input[0]
+            args = user_input[1:]
+
+            if command == 'compress1' and len(args) == 7:
+                inFileName, outFileName, startTrace, endTrace, interval, PCArate, downsample_factor = args
+                compress_segy(inFileName, outFileName, float(PCArate), int(startTrace), int(endTrace), int(interval),
+                              int(downsample_factor))
+            elif command == 'compress2' and len(args) == 7:
+                inFileName, outFileName, startTrace, endTrace, shorld, interval, chunksize = args
+                compress_wf(inFileName, outFileName, float(shorld), int(startTrace), int(endTrace), int(interval),
+                            int(chunksize))
+            elif command == 'decompress1' and len(args) == 4:
+                inFileName, outFileName, startTrace, endTrace = args
+                decompress_segy(inFileName, outFileName, int(startTrace), int(endTrace) )
+            elif command == 'decompress2' and len(args) == 4:
+                inFileName, outFileName, startTrace, endTrace = args
+                decompress_wf(inFileName, outFileName, int(startTrace), int(endTrace))
             else:
-                print("Invalid command. Please use 'compress1', 'compress2', 'decompress1', or 'decompress2'.")
+                print("Invalid command or incorrect number of arguments.")
+                print("Usage:")
+                print("  compress1 inFileName outFileName startTrace endTrace interval PCArate downsample_factor")
+                print("  compress2 inFileName outFileName startTrace endTrace shorld interval chunksize")
+                print("  decompress1 inFileName outFileName startTrace endTrace  ")
+                print("  decompress2 inFileName outFileName startTrace endTrace")
 
         except (SystemExit, KeyboardInterrupt):
             print("Exiting...")
@@ -640,13 +689,14 @@ def main():
             print(f"Error: {e}")
 
 
+
 if __name__ == "__main__":
     print("------------------begin-----------------")
     fun_main()
     # main()
 '''
  compress1 E:\app\TOOLS4\virtualBoxSharedDir\原始数据\Volume_OriFile.part000 compressed_segy_data.npz 0 210000 2001 0.95 3
- decompress1 compressed_segy_data.npz E:\app\TOOLS4\virtualBoxSharedDir\Volume.part000 0 210000 3
+ decompress1 compressed_segy_data.npz E:\app\TOOLS4\virtualBoxSharedDir\Volume.part000 0 210000  
  compress2 E:\app\TOOLS4\virtualBoxSharedDir\原始数据\Volume_OriFile.part000 compressed_segy_data.npz 0 210000 0.1 2001 2100
  decompress2 compressed_segy_data.npz E:\app\TOOLS4\virtualBoxSharedDir\Volume.part000 52500 105000
 
@@ -654,6 +704,79 @@ if __name__ == "__main__":
 '''
 
 
+# def main():
+#     '''
+#     compress1 inFileName  outFileName startTrace endTrace interval PCA压缩率 downsample_factor
+#     compress2 inFileName  outFileName startTrace endTrace compressionRate
+#     decompress1 inFileName  outFileName startTrace endTrace
+#     decompress2 inFileName  outFileName startTrace endTrace
+#     '''
+#
+#     parser = argparse.ArgumentParser(description="SEGY File Compression and Decompression")
+#
+#     subparsers = parser.add_subparsers(dest='command')
+#
+#     # 压缩模式1的命令行参数
+#     parser_compress1 = subparsers.add_parser('compress1', help='Compress SEGY file using PCA')
+#     parser_compress1.add_argument('inFileName', type=str, help='Input SEGY file name')
+#     parser_compress1.add_argument('outFileName', type=str, help='Output compressed file name')
+#     parser_compress1.add_argument('startTrace', type=int, help='Start trace number')
+#     parser_compress1.add_argument('endTrace', type=int, help='End trace number')
+#     parser_compress1.add_argument('interval', type=int, help='Number of samples per trace')
+#     parser_compress1.add_argument('PCArate', type=float, help='PCA compression rate')
+#     parser_compress1.add_argument('downsample_factor', type=int, help='Downsample factor')
+#
+#     # 压缩模式2的命令行参数
+#     parser_compress2 = subparsers.add_parser('compress2', help='Compress SEGY file using a different method')
+#     parser_compress2.add_argument('inFileName', type=str, help='Input SEGY file name')
+#     parser_compress2.add_argument('outFileName', type=str, help='Output compressed file name')
+#     parser_compress2.add_argument('startTrace', type=int, help='Start trace number')
+#     parser_compress2.add_argument('endTrace', type=int, help='End trace number')
+#     parser_compress2.add_argument('shorld', type=float, help='fft shorld')
+#     parser_compress2.add_argument('interval', type=int, help='Number of samples per trace')
+#     parser_compress2.add_argument('chunksize', type=int, help='chunksize for fft')
+#
+#     # 解压缩模式1的命令行参数
+#     parser_decompress1 = subparsers.add_parser('decompress1', help='Decompress SEGY file')
+#     parser_decompress1.add_argument('inFileName', type=str, help='Input compressed file name')
+#     parser_decompress1.add_argument('outFileName', type=str, help='Output SEGY file name')
+#     parser_decompress1.add_argument('startTrace', type=int, help='Start trace number')
+#     parser_decompress1.add_argument('endTrace', type=int, help='End trace number')
+#     parser_decompress1.add_argument('downsample_factor', type=int, help='downsample_factor')
+#
+#     # 解压缩模式2的命令行参数
+#     parser_decompress2 = subparsers.add_parser('decompress2', help='Decompress SEGY file')
+#     parser_decompress2.add_argument('inFileName', type=str, help='Input compressed file name')
+#     parser_decompress2.add_argument('outFileName', type=str, help='Output SEGY file name')
+#     parser_decompress2.add_argument('startTrace', type=int, help='Start trace number')
+#     parser_decompress2.add_argument('endTrace', type=int, help='End trace number')
+#
+#     while True:
+#         try:
+#             user_input = input("Enter command: ").split()
+#             if len(user_input) == 0:
+#                 continue
+#             args = parser.parse_args(user_input)
+#
+#             if args.command == 'compress1':
+#                 # print(" test compress1")
+#                 compress_segy(args.inFileName, args.outFileName, args.PCArate, args.startTrace, args.endTrace,
+#                               args.interval, args.downsample_factor)
+#             elif args.command == 'compress2':
+#                 compress_wf(args.inFileName, args.outFileName, args.shorld, args.startTrace, args.endTrace,
+#                             args.interval, chunk_size=args.chunksize)
+#             elif args.command == 'decompress1':
+#                 decompress_segy(args.inFileName, args.outFileName, args.startTrace, args.endTrace,args.downsample_factor)
+#             elif args.command == 'decompress2':
+#                 decompress_wf(args.inFileName, args.outFileName, args.startTrace, args.endTrace )
+#             else:
+#                 print("Invalid command. Please use 'compress1', 'compress2', 'decompress1', or 'decompress2'.")
+#
+#         except (SystemExit, KeyboardInterrupt):
+#             print("Exiting...")
+#             break
+#         except Exception as e:
+#             print(f"Error: {e}")
 
 
 

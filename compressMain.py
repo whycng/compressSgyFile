@@ -4,13 +4,13 @@ import sys
 
 import numpy as np
 from sklearn.decomposition import PCA
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 import io
 import zlib
 import joblib
 import cv2
 import pickle
-from pympler import asizeof
+# from pympler import asizeof
 from scipy.fft import fft, ifft
 from scipy.ndimage import gaussian_filter1d
 '''
@@ -296,9 +296,9 @@ def compress_segy(input_file, output_file, compression_PCArate ,start_trace,end_
 
     compressed_data, data_min, data_max = quantize_data(compressed_data, num_bits=8)
     # print("compressed_data after kb:", compressed_data.nbytes / 1024)
-    pca_size_kb = sys.getsizeof(pca) / 1024
-    pca_bytes = pca.__sizeof__()
-    pca_size_exact = asizeof.asizeof(pca)
+    # pca_size_kb = sys.getsizeof(pca) / 1024
+    # pca_bytes = pca.__sizeof__()
+    # pca_size_exact = asizeof.asizeof(pca)
     # print("pca kb:", pca_size_kb, " pca_bytes :",pca_bytes , " pca_size_exact:",pca_size_exact )
 
     # 保存压缩数据和 PCA 模型
@@ -553,66 +553,66 @@ def decompress_wf(input_file, output_file, start_trace, end_trace, num_bits=8,si
     print(f"Decompressed data saved to {output_file}")
 
 
-def plot_waveforms(original_data, decompressed_data, start_trace, end_trace):
-    """
-    绘制原始数据和解压缩后的数据的波形图。
+# def plot_waveforms(original_data, decompressed_data, start_trace, end_trace):
+#     """
+#     绘制原始数据和解压缩后的数据的波形图。
+#
+#     Args:
+#         original_data: 原始 SEGY 数据。
+#         decompressed_data: 解压缩后的 SEGY 数据。
+#         start_trace: 起始道号。
+#         end_trace: 结束道号。
+#     """
+#     plt.figure(figsize=(14, 7))
+#
+#     num_traces = end_trace - start_trace
+#     time_samples = original_data.shape[1]
+#
+#     plt.subplot(1, 2, 1)
+#     for i in range(num_traces):
+#         plt.plot(original_data[start_trace + i] + i * 2, label=f'Trace {start_trace + i}')
+#     plt.title('Original SEGY Data Waveforms')
+#     plt.xlabel('Sample Number')
+#     plt.ylabel('Amplitude')
+#     plt.legend(loc='upper right')
+#
+#     plt.subplot(1, 2, 2)
+#     for i in range(num_traces):
+#         plt.plot(decompressed_data[i] + i * 2, label=f'Trace {start_trace + i}')
+#     plt.title('Decompressed SEGY Data Waveforms')
+#     plt.xlabel('Sample Number')
+#     plt.ylabel('Amplitude')
+#     plt.legend(loc='upper right')
+#
+#     plt.tight_layout()
+#     plt.show()
 
-    Args:
-        original_data: 原始 SEGY 数据。
-        decompressed_data: 解压缩后的 SEGY 数据。
-        start_trace: 起始道号。
-        end_trace: 结束道号。
-    """
-    plt.figure(figsize=(14, 7))
-
-    num_traces = end_trace - start_trace
-    time_samples = original_data.shape[1]
-
-    plt.subplot(1, 2, 1)
-    for i in range(num_traces):
-        plt.plot(original_data[start_trace + i] + i * 2, label=f'Trace {start_trace + i}')
-    plt.title('Original SEGY Data Waveforms')
-    plt.xlabel('Sample Number')
-    plt.ylabel('Amplitude')
-    plt.legend(loc='upper right')
-
-    plt.subplot(1, 2, 2)
-    for i in range(num_traces):
-        plt.plot(decompressed_data[i] + i * 2, label=f'Trace {start_trace + i}')
-    plt.title('Decompressed SEGY Data Waveforms')
-    plt.xlabel('Sample Number')
-    plt.ylabel('Amplitude')
-    plt.legend(loc='upper right')
-
-    plt.tight_layout()
-    plt.show()
-
-def plot_data(original_data, decompressed_data, start_trace, end_trace):
-    """
-    绘制原始数据和解压缩后的数据。
-
-    Args:
-        original_data: 原始 SEGY 数据。
-        decompressed_data: 解压缩后的 SEGY 数据。
-        start_trace: 起始道号。
-        end_trace: 结束道号。
-    """
-    plt.figure(figsize=(14, 7))
-
-    plt.subplot(1, 2, 1)
-    plt.imshow(original_data[start_trace:end_trace].T, aspect='auto', cmap='seismic')
-    plt.title('Original SEGY Data')
-    plt.xlabel('Trace Number')
-    plt.ylabel('Sample Number')
-
-    plt.subplot(1, 2, 2)
-    plt.imshow(decompressed_data.T, aspect='auto', cmap='seismic')
-    plt.title('Decompressed SEGY Data')
-    plt.xlabel('Trace Number')
-    plt.ylabel('Sample Number')
-
-    plt.tight_layout()
-    plt.show()
+# def plot_data(original_data, decompressed_data, start_trace, end_trace):
+#     """
+#     绘制原始数据和解压缩后的数据。
+#
+#     Args:
+#         original_data: 原始 SEGY 数据。
+#         decompressed_data: 解压缩后的 SEGY 数据。
+#         start_trace: 起始道号。
+#         end_trace: 结束道号。
+#     """
+#     plt.figure(figsize=(14, 7))
+#
+#     plt.subplot(1, 2, 1)
+#     plt.imshow(original_data[start_trace:end_trace].T, aspect='auto', cmap='seismic')
+#     plt.title('Original SEGY Data')
+#     plt.xlabel('Trace Number')
+#     plt.ylabel('Sample Number')
+#
+#     plt.subplot(1, 2, 2)
+#     plt.imshow(decompressed_data.T, aspect='auto', cmap='seismic')
+#     plt.title('Decompressed SEGY Data')
+#     plt.xlabel('Trace Number')
+#     plt.ylabel('Sample Number')
+#
+#     plt.tight_layout()
+#     plt.show()
 
 def fun_main(): # 主函数
 
@@ -700,14 +700,15 @@ def main():
 if __name__ == "__main__":
     print("------------------begin-----------------")
     # fun_main()
-    # main()
+    main()
 
-    while True:
-        user_input = input("Enter command: ").split()
+
 '''
  compress1 E:\app\TOOLS4\virtualBoxSharedDir\原始数据\Volume_OriFile.part000 compressed_segy_data.npz 0 210000 2001 0.95 3
  decompress1 compressed_segy_data.npz E:\app\TOOLS4\virtualBoxSharedDir\Volume.part000 0 210000  
  compress2 E:\app\TOOLS4\virtualBoxSharedDir\原始数据\Volume_OriFile.part000 compressed_segy_data.npz 0.1 0 210000 2001 100
  decompress2 compressed_segy_data.npz E:\app\TOOLS4\virtualBoxSharedDir\Volume.part000 0 210000
  
+  compress1 E:\Proj\pythonProj\bisai\tmpData\Volume_OriFile.part000 compressed_segy_data.npz 0 2100 2001 0.95 3
+   compress2 E:\app\TOOLS4\virtualBoxSharedDir\原始数据\Volume_OriFile.part000 compressed_segy_data.npz 0.1 0 2100  2001 100
 '''
